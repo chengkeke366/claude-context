@@ -40,7 +40,7 @@ test("HTTP: POST /mcp without session ID and non-initialize request returns 400"
         });
 
         assert.equal(res.status, 400);
-        const body = await res.json();
+        const body = await res.json() as { error: { code: number; message: string } };
         assert.equal(body.error.code, -32000);
         assert.match(body.error.message, /No valid session ID/);
     } finally {
