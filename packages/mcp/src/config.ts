@@ -22,6 +22,10 @@ export interface ContextMcpConfig {
     milvusAddress?: string; // Optional, can be auto-resolved from token
     milvusToken?: string;
     collectionNameOverride?: string;
+    // HTTP transport configuration
+    httpPort?: number;
+    httpHost?: string;
+    authToken?: string;
 }
 
 // Legacy format (v1) - for backward compatibility
@@ -167,7 +171,11 @@ export function createMcpConfig(): ContextMcpConfig {
         // Vector database configuration - address can be auto-resolved from token
         milvusAddress: envManager.get('MILVUS_ADDRESS'), // Optional, can be resolved from token
         milvusToken: envManager.get('MILVUS_TOKEN'),
-        collectionNameOverride: envManager.get('CODE_CHUNKS_COLLECTION_NAME_OVERRIDE')
+        collectionNameOverride: envManager.get('CODE_CHUNKS_COLLECTION_NAME_OVERRIDE'),
+        // HTTP transport configuration
+        httpPort: parseInt(envManager.get('MCP_HTTP_PORT') || '3000', 10),
+        httpHost: envManager.get('MCP_HTTP_HOST') || '0.0.0.0',
+        authToken: envManager.get('MCP_AUTH_TOKEN'),
     };
 
     return config;
@@ -214,6 +222,12 @@ export function logConfigurationSummary(config: ContextMcpConfig): void {
             break;
     }
 
+    if (config.httpPort) {
+        console.log(`[MCP]   HTTP Port: ${config.httpPort}`);
+        console.log(`[MCP]   HTTP Host: ${config.httpHost || '0.0.0.0'}`);
+        console.log(`[MCP]   Auth Token: ${config.authToken ? '✅ Configured' : '❌ Not configured (no auth)'}`);
+    }
+
     console.log(`[MCP] 🔧 Initializing server components...`);
 }
 
@@ -256,6 +270,11 @@ Environment Variables:
                           after sanitization (letters/digits/underscore, 255 chars max).
                           The per-codebase pathHash is preserved so multiple
                           codebases stay distinct under the same override.
+
+  HTTP Transport Configuration:
+  MCP_HTTP_PORT           HTTP server port (default: 3000)
+  MCP_HTTP_HOST           HTTP server bind address (default: 0.0.0.0)
+  MCP_AUTH_TOKEN          Bearer token for authentication (optional)
 
   MCP Sync Configuration:
   CLAUDE_CONTEXT_BACKGROUND_SYNC
@@ -300,5 +319,11 @@ Examples:
 
   # Start MCP server with background sync enabled every minute
   OPENAI_API_KEY=sk-xxx MILVUS_TOKEN=your-token CLAUDE_CONTEXT_BACKGROUND_SYNC=true CLAUDE_CONTEXT_SYNC_INTERVAL_MS=60000 npx @zilliz/claude-context-mcp@latest
+
+  # Start MCP HTTP server (Streamable HTTP transport)
+  OPENAI_API_KEY=sk-xxx MILVUS_TOKEN=your-token npx @zilliz/claude-context-mcp-http@latest
+
+  # Start MCP HTTP server with authentication
+  OPENAI_API_KEY=sk-xxx MILVUS_TOKEN=your-token MCP_AUTH_TOKEN=your-secret-token npx @zilliz/claude-context-mcp-http@latest
         `);
 }
