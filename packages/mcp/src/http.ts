@@ -2,6 +2,7 @@
 
 import express, { Request, Response, NextFunction } from 'express';
 import { randomUUID } from 'node:crypto';
+import { realpathSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { isInitializeRequest } from '@modelcontextprotocol/sdk/types.js';
@@ -181,7 +182,14 @@ async function main() {
 }
 
 // Only run main when this file is the entry point (not when imported for testing)
-const isMain = process.argv[1] === fileURLToPath(import.meta.url);
+// Resolve symlinks (npm/pnpm link creates shim scripts that differ from the actual file path)
+const isMain = (() => {
+    try {
+        return realpathSync(process.argv[1]) === realpathSync(fileURLToPath(import.meta.url));
+    } catch {
+        return false;
+    }
+})();
 if (isMain) {
     main().catch((error) => {
         console.error("Fatal error:", error);
