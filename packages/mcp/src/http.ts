@@ -209,14 +209,35 @@ async function main() {
     process.on('SIGTERM', shutdown);
 }
 
-// Only run main when this file is the entry point (not when imported for testing)
-// Resolve symlinks (npm/pnpm link creates shim scripts that differ from the actual file path)
+// Only run main when this file is the entry point (not when imported for testing).
+// Resolve symlinks (npm/pnpm link creates shim scripts that differ from the actual file path).
+//
+// Under a process manager like pm2, the real entry is pm2's ProcessContainer and this
+// file is only loaded via dynamic import, so argv[1] points at pm2's wrapper instead of
+// this file and the plain path comparison fails — the server would silently never start
+// and pm2 would restart it forever. pm2 injects pm_exec_path / PM2_HOME into the app's
+// environment, so accept those as a fallback proof that we were launched as a server.
 const isMain = (() => {
+    let selfPath: string;
     try {
-        return realpathSync(process.argv[1]) === realpathSync(fileURLToPath(import.meta.url));
+        selfPath = realpathSync(fileURLToPath(import.meta.url));
     } catch {
         return false;
     }
+    for (const candidate of [process.argv[1], process.env.pm_exec_path]) {
+        if (!candidate) {
+            continue;
+        }
+        try {
+            if (realpathSync(candidate) === selfPath) {
+                return true;
+            }
+        } catch {
+            // Candidate path unreadable — try the next one.
+        }
+    }
+    // Launched under pm2 via a shim/wrapper: path comparison cannot succeed, trust the env.
+    return Boolean(process.env.pm_exec_path || process.env.PM2_HOME);
 })();
 if (isMain) {
     main().catch((error) => {
