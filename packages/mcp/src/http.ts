@@ -141,6 +141,21 @@ export function createHttpApp(config: {
 
 // Main execution
 async function main() {
+    // Surface unexpected failures instead of dying silently. The deployment is expected
+    // to run under a supervisor (pm2/systemd, see the deployment spec) that restarts the
+    // process after it exits.
+    //
+    // uncaughtException leaves the process in an undefined state, so log and exit rather
+    // than limp on; unhandledRejection is logged but not fatal — a rejected fire-and-forget
+    // promise (background sync, indexing) should not take down every active session.
+    process.on('uncaughtException', (error) => {
+        console.error('[FATAL] Uncaught exception — exiting so the supervisor can restart:', error);
+        process.exit(1);
+    });
+    process.on('unhandledRejection', (reason) => {
+        console.error('[ERROR] Unhandled promise rejection:', reason);
+    });
+
     const config = createMcpConfig();
     logConfigurationSummary(config);
 
@@ -153,7 +168,7 @@ async function main() {
         sessions
     });
 
-    app.listen(port, host, () => {
+    const server = app.listen(port, host, () => {
         console.log(`MCP Streamable HTTP server listening on ${host}:${port}`);
         if (config.authToken) {
             console.log(`Authentication: enabled (Bearer token)`);
@@ -161,6 +176,19 @@ async function main() {
             console.log(`Authentication: disabled`);
         }
     });
+
+    // Node's default keepAliveTimeout is 5s: the server closes idle sockets while MCP
+    // clients still hold them in their connection pools, so a pooled connection reused
+    // around the 5s boundary dies mid-request with "socket connection was closed
+    // unexpectedly". Keep idle connections alive longer (default 5 minutes, configurable
+    // via MCP_HTTP_KEEP_ALIVE_TIMEOUT / MCP_HTTP_HEADERS_TIMEOUT in config.ts) so the
+    // client — or any intermediate proxy — always closes first instead.
+    if (config.httpKeepAliveTimeout !== undefined) {
+        server.keepAliveTimeout = config.httpKeepAliveTimeout;
+    }
+    if (config.httpHeadersTimeout !== undefined) {
+        server.headersTimeout = config.httpHeadersTimeout;
+    }
 
     // Graceful shutdown
     const shutdown = async () => {

@@ -26,6 +26,10 @@ export interface ContextMcpConfig {
     httpPort?: number;
     httpHost?: string;
     authToken?: string;
+    // Idle time (ms) before the server closes a keep-alive connection.
+    httpKeepAliveTimeout?: number;
+    // Max time (ms) to receive request headers; must be > httpKeepAliveTimeout (Node >= 18).
+    httpHeadersTimeout?: number;
 }
 
 // Legacy format (v1) - for backward compatibility
@@ -137,6 +141,31 @@ function getPositiveIntegerFromEnv(name: string): number | undefined {
     return undefined;
 }
 
+// Node's default keepAliveTimeout is 5s, which is too aggressive for MCP clients: they pool
+// idle connections, and when a pooled socket is reused right at the 5s boundary while the
+// server is closing it, the request fails with "socket connection was closed unexpectedly".
+// Keep idle connections alive for 5 minutes by default so the client (or any intermediate
+// proxy) closes first and the race disappears.
+const DEFAULT_HTTP_KEEP_ALIVE_TIMEOUT_MS = 5 * 60 * 1000;
+// Node >= 18 validates headersTimeout > keepAliveTimeout at listen() time, so keep the
+// default slightly above the keep-alive value.
+const DEFAULT_HTTP_HEADERS_TIMEOUT_MS = DEFAULT_HTTP_KEEP_ALIVE_TIMEOUT_MS + 5_000;
+
+function resolveHttpTimeouts(): { httpKeepAliveTimeout: number; httpHeadersTimeout: number } {
+    const httpKeepAliveTimeout = getPositiveIntegerFromEnv('MCP_HTTP_KEEP_ALIVE_TIMEOUT') ?? DEFAULT_HTTP_KEEP_ALIVE_TIMEOUT_MS;
+    let httpHeadersTimeout = getPositiveIntegerFromEnv('MCP_HTTP_HEADERS_TIMEOUT') ?? DEFAULT_HTTP_HEADERS_TIMEOUT_MS;
+    // Node >= 18 refuses to start when headersTimeout <= keepAliveTimeout; repair the
+    // combination instead of crashing so a partial override can't break startup.
+    if (httpHeadersTimeout <= httpKeepAliveTimeout) {
+        console.warn(
+            `[DEBUG] ⚠️  MCP_HTTP_HEADERS_TIMEOUT (${httpHeadersTimeout}ms) must be greater than ` +
+            `MCP_HTTP_KEEP_ALIVE_TIMEOUT (${httpKeepAliveTimeout}ms); using ${httpKeepAliveTimeout + 5_000}ms.`
+        );
+        httpHeadersTimeout = httpKeepAliveTimeout + 5_000;
+    }
+    return { httpKeepAliveTimeout, httpHeadersTimeout };
+}
+
 export function createMcpConfig(): ContextMcpConfig {
     // Debug: Print all environment variables related to Context
     console.log(`[DEBUG] 🔍 Environment Variables Debug:`);
@@ -176,6 +205,7 @@ export function createMcpConfig(): ContextMcpConfig {
         httpPort: parseInt(envManager.get('MCP_HTTP_PORT') || '3000', 10),
         httpHost: envManager.get('MCP_HTTP_HOST') || '0.0.0.0',
         authToken: envManager.get('MCP_AUTH_TOKEN'),
+        ...resolveHttpTimeouts(),
     };
 
     return config;
@@ -226,6 +256,8 @@ export function logConfigurationSummary(config: ContextMcpConfig): void {
         console.log(`[MCP]   HTTP Port: ${config.httpPort}`);
         console.log(`[MCP]   HTTP Host: ${config.httpHost || '0.0.0.0'}`);
         console.log(`[MCP]   Auth Token: ${config.authToken ? '✅ Configured' : '❌ Not configured (no auth)'}`);
+        console.log(`[MCP]   HTTP Keep-Alive Timeout: ${config.httpKeepAliveTimeout}ms`);
+        console.log(`[MCP]   HTTP Headers Timeout: ${config.httpHeadersTimeout}ms`);
     }
 
     console.log(`[MCP] 🔧 Initializing server components...`);
@@ -275,6 +307,16 @@ Environment Variables:
   MCP_HTTP_PORT           HTTP server port (default: 3000)
   MCP_HTTP_HOST           HTTP server bind address (default: 0.0.0.0)
   MCP_AUTH_TOKEN          Bearer token for authentication (optional)
+  MCP_HTTP_KEEP_ALIVE_TIMEOUT
+                          Idle time (ms) before the server closes a keep-alive
+                          connection (default: 300000 = 5 minutes). Node's default
+                          of 5s races with MCP client connection pools and causes
+                          "socket connection was closed unexpectedly" errors.
+  MCP_HTTP_HEADERS_TIMEOUT
+                          Max time (ms) to receive request headers (default:
+                          keep-alive timeout + 5000). Must be greater than
+                          MCP_HTTP_KEEP_ALIVE_TIMEOUT; smaller values are raised
+                          automatically.
 
   MCP Sync Configuration:
   CLAUDE_CONTEXT_BACKGROUND_SYNC

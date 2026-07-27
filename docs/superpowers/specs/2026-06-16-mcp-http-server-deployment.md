@@ -162,7 +162,10 @@ MCP_AUTH_TOKEN="your-secret-token" \
   claude-context-mcp-http
 ```
 
-**方式二：后台运行**
+**方式二：后台运行（推荐，pm2 守护 + 崩溃自动拉起）**
+
+裸 `nohup` 跑的进程崩溃后不会自动恢复，服务会一直挂到人工重启。建议用 pm2 守护
+（`npm install -g pm2`）：
 
 ```bash
 OPENAI_API_KEY="sk-your-api-key" \
@@ -175,8 +178,17 @@ MILVUS_TOKEN="" \
 MCP_HTTP_PORT=3000 \
 MCP_HTTP_HOST=0.0.0.0 \
 MCP_AUTH_TOKEN="your-secret-token" \
-  nohup claude-context-mcp-http > /tmp/mcp-http.log 2>&1 &
+  pm2 start claude-context-mcp-http --name mcp-http --restart-delay 2000
+
+# 开机自启（可选）
+pm2 save && pm2 startup
 ```
+
+常用命令：`pm2 logs mcp-http`（看日志，崩溃堆栈在这里）、`pm2 restart mcp-http`、`pm2 stop mcp-http`。
+
+> 注：服务端已注册 `uncaughtException` 兜底，未捕获异常会打印完整堆栈后退出（exit 1），
+> pm2 随即自动拉起新进程。没有 pm2 的环境也可以退回 `nohup claude-context-mcp-http > /tmp/mcp-http.log 2>&1 &`，
+> 但崩溃后需要人工重启。
 
 **方式三：使用全局配置文件**
 
