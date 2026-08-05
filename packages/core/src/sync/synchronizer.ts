@@ -302,7 +302,14 @@ export class FileSynchronizer {
             fileHashes: fileHashesArray,
             merkleDAG: this.merkleDAG.serialize()
         });
-        await fs.writeFile(this.snapshotPath, data, 'utf-8');
+
+        // Atomic write: write to a temp file then rename. A crash mid-write
+        // leaves the temp file orphaned but never corrupts the live snapshot,
+        // so loadSnapshot never sees a truncated/empty JSON file. rename() is
+        // atomic when src and dst live on the same filesystem (they do here).
+        const tmpPath = `${this.snapshotPath}.${process.pid}.tmp`;
+        await fs.writeFile(tmpPath, data, 'utf-8');
+        await fs.rename(tmpPath, this.snapshotPath);
         console.log(`Saved snapshot to ${this.snapshotPath}`);
     }
 
@@ -322,8 +329,17 @@ export class FileSynchronizer {
             }
             console.log(`Loaded snapshot from ${this.snapshotPath}`);
         } catch (error: any) {
-            if (error.code === 'ENOENT') {
-                console.log(`Snapshot file not found at ${this.snapshotPath}. Generating new one.`);
+            // Treat a missing OR corrupted snapshot as "needs rebuild".
+            // A truncated/empty file (e.g. a crash mid-saveSnapshot before
+            // the atomic rename existed) makes JSON.parse throw a SyntaxError.
+            // Re-throwing surfaces "Unexpected end of JSON input" and wedges
+            // background-index retries in a 0%-failed loop, so regenerate.
+            if (error.code === 'ENOENT' || error instanceof SyntaxError) {
+                if (error.code === 'ENOENT') {
+                    console.log(`Snapshot file not found at ${this.snapshotPath}. Generating new one.`);
+                } else {
+                    console.warn(`Snapshot file at ${this.snapshotPath} is corrupted (${error.message}). Regenerating.`);
+                }
                 this.fileHashes = await this.generateFileHashes(this.rootDir);
                 this.merkleDAG = this.buildMerkleDAG(this.fileHashes);
                 await this.saveSnapshot();
